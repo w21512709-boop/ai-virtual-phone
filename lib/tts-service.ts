@@ -318,7 +318,13 @@ export function unlockAudioPlayback(): void {
 function installUnlockListener(): void {
     if (_unlockListenerInstalled || typeof window === "undefined") return;
     _unlockListenerInstalled = true;
-    const handler = () => { unlockAudioPlayback(); };
+    // Only prime Web Audio when a voice/video call is actually active.
+    // Previously every ordinary tap in Float played a muted WAV and resumed an
+    // AudioContext, which can interrupt Apple Music/Spotify on iOS.
+    // VN mode explicitly invokes unlockAudioPlayback() from its voice toggle.
+    const handler = () => {
+        if (_callAudioSessionActive) unlockAudioPlayback();
+    };
     window.addEventListener("touchend", handler, { passive: true });
     window.addEventListener("pointerdown", handler, { passive: true });
     window.addEventListener("mousedown", handler, { passive: true });
