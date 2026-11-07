@@ -36,6 +36,21 @@ const nextConfig = {
   outputFileTracingIncludes: {
     "/api/**": ["./data/**"],
   },
+  async headers() {
+    return [
+      {
+        // 页面 HTML 强制每次向服务器确认最新版，避免手机缓存旧 HTML。
+        // 旧 HTML 里引用的 JS 在新部署后已被替换，会触发
+        // "Application error: a client-side exception ..." 白屏，且要刷新几次才好。
+        // 这里只影响浏览器导航页面（Accept: text/html），带 hash 的 JS/CSS 资源不受影响。
+        source: "/:path*",
+        has: [{ type: "header", key: "accept", value: "text/html" }],
+        headers: [
+          { key: "Cache-Control", value: "no-cache, must-revalidate" },
+        ],
+      },
+    ];
+  },
   webpack: (config, { isServer, webpack }) => {
     if (!isServer) {
       // @gltf-transform/core 的 dist 引用 node:fs / node:path(带 node: 前缀),
