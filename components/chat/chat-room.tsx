@@ -1322,8 +1322,10 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
     const [expandedVoiceCallIds, setExpandedVoiceCallIds] = useState<Set<string>>(new Set());
     const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
     const [hasMore, setHasMore] = useState(false);
-    const INITIAL_LOAD = CHAT_INITIAL_VISIBLE_MESSAGE_COUNT;
-    const LOAD_MORE_COUNT = CHAT_LOAD_MORE_MESSAGE_COUNT;
+    // iOS group chat: mount fewer rich bubbles at once to lower WebKit memory pressure.
+    // This affects only the visible window, never the persisted chat history.
+    const INITIAL_LOAD = session.isGroup ? 24 : CHAT_INITIAL_VISIBLE_MESSAGE_COUNT;
+    const LOAD_MORE_COUNT = session.isGroup ? 16 : CHAT_LOAD_MORE_MESSAGE_COUNT;
 
 
     const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -1746,7 +1748,13 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
         const charIds = session.isGroup && session.participantIds
             ? session.participantIds
             : [session.contactId];
-        Promise.all(charIds.map(id => prewarmStickerCache(id))).then(() => {
+        // Groups can contain multiple large sticker collections. Preloading every
+        // member's full asset map allocates many image data URLs at once on iOS.
+        // StickerBubble already resolves only the stickers it needs on demand.
+        const stickerWarmup = session.isGroup
+            ? Promise.resolve()
+            : Promise.all(charIds.map(id => prewarmStickerCache(id)));
+        stickerWarmup.then(() => {
             setStickerReady(true);
             needsInitialScrollRef.current = true;
             prevMsgCountRef.current = 0;

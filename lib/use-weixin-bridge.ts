@@ -15,6 +15,11 @@ export type BotRunStatus = {
 // 恢复功能：改回 false 重新部署。长期方案=用户电脑本地助手接管轮询。
 const WEIXIN_BRIDGE_PAUSED: boolean = true;
 
+// iOS test build: don't play fake silent audio for background keep-alive.
+// It grabs the OS media session / Dynamic Island even though it sounds silent.
+// Keep the Wake Lock path and manual music/voice playback untouched.
+const ENABLE_SILENT_AUDIO_KEEPALIVE = false;
+
 // 模块级状态：让设置页面也能读到
 const _statusMap = new Map<string, BotRunStatus>();
 
@@ -90,6 +95,10 @@ async function startKeepAlive() {
             _wakeLock.addEventListener("release", () => { _wakeLock = null; });
         }
     } catch {}
+
+    // Do not acquire iOS audio focus merely to keep the page alive.
+    // Wake Lock above is retained; actual media playback remains unchanged.
+    if (!ENABLE_SILENT_AUDIO_KEEPALIVE) return;
 
     // 准备音频
     ensureAudioCreated();

@@ -232,6 +232,20 @@ export function MainApp() {
   const [splashDismissed, setSplashDismissed] = useState(false);
   const [kvHydrateFailed, setKvHydrateFailed] = useState(false);
   const [initAttempt, setInitAttempt] = useState(0);
+  // 本地数据库（IndexedDB）写入失败提示：iOS 上写入可能失败，若不提示用户会以为
+  // 消息已保存，闪退后才发现只剩一半
+  const [dbWriteWarning, setDbWriteWarning] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onDbWriteFailure = (event: Event) => {
+      const detail = (event as CustomEvent<{ context?: string; message?: string }>).detail;
+      setDbWriteWarning(
+        `聊天记录保存失败（${detail?.context || "写入数据库"}）。请尽快到「设置 → 数据/备份」导出备份，并到「设置 → 存储空间」清理聊天图片/语音后重试。`,
+      );
+    };
+    window.addEventListener("chat-db-write-failure", onDbWriteFailure);
+    return () => window.removeEventListener("chat-db-write-failure", onDbWriteFailure);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -307,23 +321,41 @@ export function MainApp() {
   }
 
   return (
-    <AccountGate>
-      {!splashDismissed ? (
-        <SplashScreen ready={hydrated} onEnter={() => setSplashDismissed(true)} />
-      ) : (
-        <main className="app-root">
-          <MusicProvider>
-            <DesktopShell
-              initialThemeProfile={preparedDesktopTheme?.profile}
-              initialThemeAssets={preparedDesktopTheme?.assets}
-            />
-            <OfflinePushRevampAnnouncement />
-            <CloudBackupScheduler />
-            <RealityBridgeScheduler />
-            <MediaMaintenanceScheduler />
-          </MusicProvider>
-        </main>
+    <>
+      {dbWriteWarning && (
+        <div
+          role="alert"
+          style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 2147483646, padding: "12px 14px", background: "#7a1f1f", color: "#fff", fontSize: 13, lineHeight: 1.6, boxShadow: "0 2px 12px rgba(0,0,0,0.35)" }}
+        >
+          <span>{dbWriteWarning}</span>
+          <button
+            type="button"
+            onClick={() => setDbWriteWarning(null)}
+            aria-label="关闭提示"
+            style={{ marginLeft: 10, padding: "2px 10px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.5)", background: "transparent", color: "#fff", fontSize: 12, cursor: "pointer" }}
+          >
+            知道了
+          </button>
+        </div>
       )}
-    </AccountGate>
+      <AccountGate>
+        {!splashDismissed ? (
+          <SplashScreen ready={hydrated} onEnter={() => setSplashDismissed(true)} />
+        ) : (
+          <main className="app-root">
+            <MusicProvider>
+              <DesktopShell
+                initialThemeProfile={preparedDesktopTheme?.profile}
+                initialThemeAssets={preparedDesktopTheme?.assets}
+              />
+              <OfflinePushRevampAnnouncement />
+              <CloudBackupScheduler />
+              <RealityBridgeScheduler />
+              <MediaMaintenanceScheduler />
+            </MusicProvider>
+          </main>
+        )}
+      </AccountGate>
+    </>
   );
 }

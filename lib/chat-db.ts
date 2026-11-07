@@ -140,59 +140,118 @@ function safeParse<T>(raw: string | null): T[] {
     try { return raw ? JSON.parse(raw) : []; } catch { return []; }
 }
 
-// ── Async persistence helpers (fire-and-forget) ──
+// ── Async persistence helpers ──
+//
+// ⚠️ iOS 兼容性说明（针对 iOS Safari 闪退）：
+// 之前这里所有写库都是 fire-and-forget，写失败只在控制台打一条 warn，界面毫无感知。
+// 在 iOS 上，IndexedDB 写入可能在低内存/存储压力下失败或被系统打断：消息看着已经发出去了，
+// 但实际没写进数据库。页面一旦被系统杀掉重载，就只剩写成功的那一部分 —— 这就是「消息只剩一半」。
+// 因此这里统一改成：失败先重试一次（短暂延迟），仍失败则派发事件让界面提示用户，不再静默吞掉。
+
+/** 触发「本地数据库写入失败」事件，供界面提示（见 components/main-app.tsx 的监听）。 */
+export function notifyDbWriteFailure(context: string, err: unknown): void {
+  if (typeof window === "undefined") return;
+  try {
+    const detail = {
+      context,
+      message: err instanceof Error ? err.message : String(err),
+    };
+    window.dispatchEvent(new CustomEvent("chat-db-write-failure", { detail }));
+  } catch {
+    /* 提示失败不影响主流程 */
+  }
+}
+
+/**
+ * 对一次写库操作做「重试一次 + 失败通知」。
+ * 保持原 fire-and-forget 风格：返回 Promise<void>，调用方无需 await。
+ */
+async function persistWithRetry(context: string, op: () => Promise<unknown>): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await op();
+      return;
+    } catch (err) {
+      if (attempt === 0) {
+        // 首次失败：等 400ms 重试一次（iOS 上瞬时失败常见，重试往往能成功）
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        continue;
+      }
+      console.error(`[ChatDB] ${context} 写入失败（已重试一次）:`, err);
+      notifyDbWriteFailure(context, err);
+    }
+  }
+}
+
+function putMessageWithRetry(msg: ChatMessage): void {
+  void persistWithRetry("put message", () => chatDb.messages.put(msg));
+}
+
+function putMessagesWithRetry(msgs: ChatMessage[]): void {
+  if (msgs.length === 0) return;
+  void persistWithRetry(`bulkPut ${msgs.length} messages`, () => chatDb.messages.bulkPut(msgs));
+}
 
 export function dbPutMessage(msg: ChatMessage): void {
-    chatDb.messages.put(msg).catch(err => console.warn("[ChatDB] put message failed:", err));
+  putMessageWithRetry(msg);
 }
 
 export function dbPutMessages(msgs: ChatMessage[]): void {
-    chatDb.messages.bulkPut(msgs).catch(err => console.warn("[ChatDB] bulkPut messages failed:", err));
+  putMessagesWithRetry(msgs);
 }
 
 export function dbDeleteMessage(id: string): void {
-    chatDb.messages.delete(id).catch(err => console.warn("[ChatDB] delete message failed:", err));
+  void persistWithRetry("delete message", () => chatDb.messages.delete(id));
 }
 
 export function dbDeleteMessagesBySession(sessionId: string): void {
-    chatDb.messages.where("sessionId").equals(sessionId).delete()
-        .catch(err => console.warn("[ChatDB] delete session messages failed:", err));
+  void persistWithRetry(
+    "delete session messages",
+    () => chatDb.messages.where("sessionId").equals(sessionId).delete(),
+  );
 }
 
 export function dbDeleteMessagesByIds(ids: string[]): void {
-    chatDb.messages.bulkDelete(ids).catch(err => console.warn("[ChatDB] bulkDelete messages failed:", err));
+  if (ids.length === 0) return;
+  void persistWithRetry(`bulkDelete ${ids.length} messages`, () => chatDb.messages.bulkDelete(ids));
 }
 
 export function dbPutSession(session: ChatSession): void {
-    chatDb.sessions.put(session).catch(err => console.warn("[ChatDB] put session failed:", err));
+  void persistWithRetry("put session", () => chatDb.sessions.put(session));
 }
 
 export function dbPutSessions(sessions: ChatSession[]): void {
-    chatDb.sessions.bulkPut(sessions).catch(err => console.warn("[ChatDB] bulkPut sessions failed:", err));
+  if (sessions.length === 0) return;
+  void persistWithRetry(`bulkPut ${sessions.length} sessions`, () => chatDb.sessions.bulkPut(sessions));
 }
 
 export function dbReplaceSessions(sessions: ChatSession[]): void {
-    chatDb.transaction("rw", chatDb.sessions, async () => {
-        await chatDb.sessions.clear();
-        await chatDb.sessions.bulkPut(sessions);
-    }).catch(err => console.warn("[ChatDB] replace sessions failed:", err));
+  void persistWithRetry("replace sessions", async () => {
+    await chatDb.transaction("rw", chatDb.sessions, async () => {
+      await chatDb.sessions.clear();
+      await chatDb.sessions.bulkPut(sessions);
+    });
+  });
 }
 
 export function dbDeleteSession(id: string): void {
-    chatDb.sessions.delete(id).catch(err => console.warn("[ChatDB] delete session failed:", err));
+  void persistWithRetry("delete session", () => chatDb.sessions.delete(id));
 }
 
 export function dbPutContacts(contacts: ChatContact[]): void {
-    chatDb.contacts.bulkPut(contacts).catch(err => console.warn("[ChatDB] bulkPut contacts failed:", err));
+  if (contacts.length === 0) return;
+  void persistWithRetry(`bulkPut ${contacts.length} contacts`, () => chatDb.contacts.bulkPut(contacts));
 }
 
 export function dbClearContacts(): void {
-    chatDb.contacts.clear().catch(err => console.warn("[ChatDB] clear contacts failed:", err));
+  void persistWithRetry("clear contacts", () => chatDb.contacts.clear());
 }
 
 export function dbReplaceContacts(contacts: ChatContact[]): void {
-    chatDb.transaction("rw", chatDb.contacts, async () => {
-        await chatDb.contacts.clear();
-        await chatDb.contacts.bulkPut(contacts);
-    }).catch(err => console.warn("[ChatDB] replaceContacts failed:", err));
+  void persistWithRetry("replaceContacts", async () => {
+    await chatDb.transaction("rw", chatDb.contacts, async () => {
+      await chatDb.contacts.clear();
+      await chatDb.contacts.bulkPut(contacts);
+    });
+  });
 }
